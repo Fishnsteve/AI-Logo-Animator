@@ -17,36 +17,53 @@ export const generateLogo = async (description: string): Promise<{ pngBase64: st
   }
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
+  // Step 1: Generate the PNG logo first.
   const pngPrompt = `A professional, modern, minimalist logo for a company that does "${description}". Flat design, vector style, on a transparent background, high contrast, PNG format.`;
-
-  const svgPrompt = `You are an expert SVG logo designer. Create the SVG code for a professional, modern, minimalist logo for a company. The logo should be inspired by this description: "${description}".
-RULES:
-- The SVG code must be a single, self-contained block.
-- Use a viewBox="0 0 100 100".
-- The background must be transparent.
-- Use simple shapes and flat colors.
-- Do not include any raster data (like <image> tags).
-- Do not include any scripts.
-- The entire output should be ONLY the SVG code, starting with <svg> and ending with </svg>. Do not include markdown fences like \`\`\`svg or explanations.`;
-
-  // Run both requests in parallel for efficiency
-  const [pngResponse, svgResponse] = await Promise.all([
-    ai.models.generateImages({
-      model: 'imagen-4.0-generate-001',
-      prompt: pngPrompt,
-      config: {
-        numberOfImages: 1,
-        outputMimeType: 'image/png',
-        aspectRatio: '1:1',
-      },
-    }),
-    ai.models.generateContent({
-      model: 'gemini-2.5-pro',
-      contents: svgPrompt,
-    })
-  ]);
+  
+  const pngResponse = await ai.models.generateImages({
+    model: 'imagen-4.0-generate-001',
+    prompt: pngPrompt,
+    config: {
+      numberOfImages: 1,
+      outputMimeType: 'image/png',
+      aspectRatio: '1:1',
+    },
+  });
 
   const pngBase64 = pngResponse.generatedImages?.[0]?.image.imageBytes;
+
+  if (!pngBase64) {
+    throw new Error("Failed to generate the initial PNG logo image.");
+  }
+
+  // Step 2: Use the generated PNG as a visual reference to generate the SVG.
+  const svgPrompt = `You are an expert vector artist specializing in SVG conversion.
+Analyze the provided PNG image of a logo and convert it into clean, simple, flat-style SVG code.
+The original text description for this logo was: "${description}".
+
+RULES:
+- The SVG code must be a single, self-contained block.
+- Replicate the shapes, colors, and overall style of the provided image as closely as possible.
+- Use a viewBox="0 0 100 100".
+- The background MUST be transparent.
+- Use simple shapes (<path>, <circle>, <rect>, etc.) and flat colors. No gradients or complex filters.
+- Do not include any raster data (like <image> tags).
+- Do not include any scripts.
+- The entire output should be ONLY the SVG code, starting with <svg> and ending with </svg>. Do not include markdown fences like \`\`\`svg or any explanations.`;
+
+  const imagePart = {
+    inlineData: {
+      mimeType: 'image/png',
+      data: pngBase64,
+    },
+  };
+  const textPart = { text: svgPrompt };
+  
+  const svgResponse = await ai.models.generateContent({
+    model: 'gemini-2.5-pro', // Using a powerful model for visual analysis
+    contents: { parts: [imagePart, textPart] },
+  });
+
   let svgCode = svgResponse.text?.trim() ?? '';
 
   // Clean up potential markdown fences from the SVG response
@@ -62,8 +79,10 @@ RULES:
   if (pngBase64 && svgCode) {
     return { pngBase64, svgCode };
   }
-
-  return null;
+  
+  // If SVG generation fails, we still have the PNG, but we'll treat it as a failure for consistency
+  // since the user expects both.
+  throw new Error("Successfully generated PNG, but failed to convert it to SVG.");
 };
 
 
